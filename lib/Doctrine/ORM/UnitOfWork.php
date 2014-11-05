@@ -1778,10 +1778,14 @@ class UnitOfWork implements PropertyChangedListener
         $oid = spl_object_hash($entity);
 
         if (isset($visited[$oid])) {
-            return $visited[$oid]; // Prevent infinite recursion
-        }
+            $managedCopy = $visited[$oid];
 
-        $visited[$oid] = $entity; // mark visited
+            if ($prevManagedCopy !== null) {
+                $this->mergeIntoPrevious($entity, $prevManagedCopy, $assoc, $managedCopy);
+            }
+
+            return $managedCopy;
+        }
 
         $class = $this->em->getClassMetadata(get_class($entity));
 
@@ -1845,6 +1849,8 @@ class UnitOfWork implements PropertyChangedListener
                     throw OptimisticLockException::lockFailedVersionMismatch($entity, $entityVersion, $managedCopyVersion);
                 }
             }
+
+            $visited[$oid] = $managedCopy; // mark visited
 
             if (!($entity instanceof Proxy && ! $entity->__isInitialized())) {
                 // Merge state of $entity into existing (managed) entity
@@ -1928,26 +1934,38 @@ class UnitOfWork implements PropertyChangedListener
         }
 
         if ($prevManagedCopy !== null) {
-            $assocField = $assoc['fieldName'];
-            $prevClass = $this->em->getClassMetadata(get_class($prevManagedCopy));
-
-            if ($assoc['type'] & ClassMetadata::TO_ONE) {
-                $prevClass->reflFields[$assocField]->setValue($prevManagedCopy, $managedCopy);
-            } else {
-                $prevClass->reflFields[$assocField]->getValue($prevManagedCopy)->add($managedCopy);
-
-                if ($assoc['type'] == ClassMetadata::ONE_TO_MANY) {
-                    $class->reflFields[$assoc['mappedBy']]->setValue($managedCopy, $prevManagedCopy);
-                }
-            }
+            $this->mergeIntoPrevious($entity, $prevManagedCopy, $assoc, $managedCopy);
         }
 
         // Mark the managed copy visited as well
-        $visited[spl_object_hash($managedCopy)] = true;
+        $visited[spl_object_hash($managedCopy)] = $managedCopy;
 
         $this->cascadeMerge($entity, $managedCopy, $visited);
 
         return $managedCopy;
+    }
+
+    /**
+     * @param $entity
+     * @param $prevManagedCopy
+     * @param $assoc
+     * @param $managedCopy
+     */
+    private function mergeIntoPrevious($entity, $prevManagedCopy, $assoc, $managedCopy)
+    {
+        $assocField = $assoc['fieldName'];
+        $prevClass = $this->em->getClassMetadata(get_class($prevManagedCopy));
+
+        if ($assoc['type'] & ClassMetadata::TO_ONE) {
+            $prevClass->reflFields[$assocField]->setValue($prevManagedCopy, $managedCopy);
+        } else {
+            $prevClass->reflFields[$assocField]->getValue($prevManagedCopy)->add($managedCopy);
+
+            if ($assoc['type'] == ClassMetadata::ONE_TO_MANY) {
+                $class = $this->em->getClassMetadata(get_class($entity));
+                $class->reflFields[$assoc['mappedBy']]->setValue($managedCopy, $prevManagedCopy);
+            }
+        }
     }
 
     /**
